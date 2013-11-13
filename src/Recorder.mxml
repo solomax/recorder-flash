@@ -1,0 +1,193 @@
+<?xml version="1.0"?>
+<mx:Application name="red5Recorder"
+    xmlns:mx="http://www.adobe.com/2006/mxml"
+    layout="vertical" verticalAlign="top" backgroundColor="white"
+    applicationComplete="init();"
+    >
+    <mx:Metadata>
+        [SWF(pageTitle="hello", backgroundColor="#ccddee", width="320", height="240")]
+    </mx:Metadata>
+
+    <mx:Script>
+    <![CDATA[
+        import mx.core.FlexGlobals;
+        import flash.display.Sprite;
+        import flash.events.*;
+        import flash.media.Video;
+        import flash.media.Camera;
+        import flash.net.NetConnection;
+        import flash.net.NetStream;
+
+        import mx.controls.Button;
+        import mx.controls.Label;
+
+        private var nc:NetConnection = null;
+        private var ns:NetStream = null;
+        private var video_publish:Video;
+        private var cam:Camera = null;
+        private var mic:Microphone = null;
+        private var sessionId:String = null;
+        private var connected:Boolean = false;
+
+        private function msg(str:String):void {
+            //trace(str);
+            status.text = str;
+        }
+
+        public function init():void {
+            if (Camera.names.length == 0) {
+                status.text = "You do not have any cameras attached.";
+                status.visible = true;
+            } else {
+                initJS();
+            }
+        }
+
+        private function initJS():void {
+            if (ExternalInterface.available) {
+                try {
+                    if (isContainerReady()) {
+                        setupCallbacks()
+                    } else {
+                        var readyTimer:Timer = new Timer(100);
+                        readyTimer.addEventListener(TimerEvent.TIMER, timerHandler);
+                        readyTimer.start();
+                    }
+                } catch (myError:Error) {
+                    msg("error caught: " + myError);
+                }
+            } else {
+                msg("External interface is not available for this container.");
+            }
+        }
+
+        private function setupCallbacks():void {
+            ExternalInterface.call("selectDevices", Camera.names, Microphone.names);
+            ExternalInterface.addCallback("setDevices", setDevices);
+            ExternalInterface.addCallback("onUnload", onUnload);
+        }
+
+        private function isContainerReady():Boolean {
+            return ExternalInterface.call("isReady");
+        }
+
+        private function timerHandler(event:TimerEvent):void {
+            if (isContainerReady()) {
+                Timer(event.target).stop();
+                setupCallbacks();
+            }
+        }
+
+        private function setDevices(devices:Object):void {
+            cam = Camera.getCamera("" + devices.camera);
+            mic = Microphone.getMicrophone(int(devices.mic));
+            if (cam == null || mic == null) {
+                msg("You don't seem to have a camera and mic.");
+                return;
+            }
+            if (cam.muted) {
+                msg("Camera Muted");
+                videoDisplay.attachCamera(cam);
+                videoDisplay.visible = true;
+                cam.addEventListener(StatusEvent.STATUS, cameraStatusHandler);
+            } else {
+                startCamera();
+            }
+        }
+
+        private function cameraStatusHandler(event:StatusEvent):void {
+            msg("cameraStatusHandler! " + event);
+            if (cam.muted) {
+                msg("Unable to connect to active camera.");
+            } else {
+                startCamera();
+            }
+            cam.removeEventListener(StatusEvent.STATUS, cameraStatusHandler);
+        }
+
+        private function startCamera():void {
+            if (cam.muted) {
+                msg("Unable to connect to active camera.");
+            } else {
+                try {
+                    nc = new NetConnection();
+                    nc.addEventListener(NetStatusEvent.NET_STATUS, netStatusHandler);
+
+                    var clientObj:Object = new Object();
+                    clientObj.onBWDone = onBWDone;
+                    clientObj.onBWCheck = onBWCheck;
+                    //clientObj.onSessionId = onSessionId;
+                    nc.client = clientObj;
+
+                    nc.connect(FlexGlobals.topLevelApplication.parameters.recordUrl
+                        , FlexGlobals.topLevelApplication.parameters.clientcode
+                        , FlexGlobals.topLevelApplication.parameters.time
+                        , FlexGlobals.topLevelApplication.parameters.hash
+                    );
+                } catch (myError:Error) {
+                    msg("startCamera: error caught: " + myError);
+                }
+            }
+        }
+
+        private function netStatusHandler(event:NetStatusEvent):void {
+            msg(event.info.code + " | " + event.info.description);
+            switch (event.info.code) {
+                case "NetConnection.Connect.Success":
+                    connected = true;
+                    /*if (sessionId != null)*/ {
+                        publishVideo();
+                    }
+                    break;
+                case "NetStream.Publish.Start":
+                    playbackVideo();
+                    break;
+            }
+        }
+
+        private function publishVideo():void {
+            ns = new NetStream(nc);
+            ns.addEventListener(NetStatusEvent.NET_STATUS, netStatusHandler);
+            ns.attachCamera(cam);
+            ns.attachAudio(mic);
+/*            var videoURL:String =
+                FlexGlobals.topLevelApplication.parameters.time + "_"
+                + sessionId + "_"
+                + FlexGlobals.topLevelApplication.parameters.hash;
+*/
+            ns.publish("" + new Date().time, "live");
+        }
+
+        private function playbackVideo():void {
+            videoDisplay.width = cam.width;
+            videoDisplay.height = cam.height;
+            videoDisplay.attachCamera(cam)
+            videoDisplay.visible = true;
+        }
+/*
+        public function onSessionId(sessionId:String):void {
+            msg("Session id recieved: " + sessionId);
+            this.sessionId = sessionId;
+            if (connected) {
+                publishVideo();
+            }
+        }
+*/
+        public function onBWDone(... rest):Boolean {
+            return true;
+        }
+
+        public function onBWCheck(... rest):Number {
+            return 0;
+        }
+
+        private function onUnload():void {
+            if (ns != null) ns.close();
+            if (nc != null) nc.close();
+        }
+    ]]>
+    </mx:Script>
+    <mx:VideoDisplay id="videoDisplay" visible="false" width="0" height="0" />
+    <!--mx:Label id="status" visible="true" width="100%" height="300"/-->
+    <mx:TextArea id="status" visible="true" wordWrap="true" width="100%" height="30" editable="false"/>
+</mx:Application>
